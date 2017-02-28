@@ -1,0 +1,46 @@
+#include "Fire.h"
+#include "FastLED.h"
+
+Fire::Fire(Lamp* thelamp, String name) : LampAnimation(thelamp, name) {
+  int num_leds = lamp->getNumLeds();
+  // Array of temperature readings at each simulation cell
+  byte heat[num_leds];
+}
+
+int Fire::itterate()
+{
+  if(tick()) {
+    random16_add_entropy( random(0, 900000));
+    int num_leds = lamp->getNumLeds();
+  
+    // Step 1.  Cool down every cell a little
+    for( int i = 0; i < num_leds; i++) {
+      heat[i] = qsub8( heat[i],  random8(0, ((cooling * 10) / num_leds) + 2));
+    }
+  
+    // Step 2.  Heat from each cell drifts 'up' and diffuses a little
+    for( int k= num_leds - 1; k >= 2; k--) {
+      heat[k] = (heat[k - 1] + heat[k - 2] + heat[k - 2] ) / 3;
+    }
+  
+    // Step 3.  Randomly ignite new 'sparks' of heat near the bottom
+    if( random8() < sparking ) {
+      int y = random8(7);
+      heat[y] = qadd8( heat[y], random8(160,255) );
+    }
+  
+    // Step 4.  Map from heat cells to LED colors
+    for( int j = 0; j < num_leds; j++) {
+      lamp->setLed(j, HeatColor(heat[j]));
+    }
+    lamp->render();
+  }
+  return 1;
+}
+
+void Fire::reset()
+{
+  fps = 60;
+  cooling = 55;
+  sparking = 120;
+}

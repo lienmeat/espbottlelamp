@@ -1,9 +1,9 @@
 //I have no idea what I need this for anymore...
 #include <Arduino.h>
+#include "filestorage.h"
 #include "Lamp.h"
 #include "AnimationManager.h"
-//#include "animations.h"
-//#include "ota.h"
+#include "ota.h"
 
 //animation libs
 #include "LampAnimation.h"
@@ -30,16 +30,26 @@
 #define NUM_LEDS 4
 #define NUM_COLS 4
 
+String device = "bottlelamp";
+String device_id = "";
+String device_name = "";
+
 const byte DNS_PORT = 53;
 DNSServer dnsServer;
 
-String ap_ssid = "BOTTLELAMP_AP";
+String ap_ssid = device + "_AP";
 String ap_password = "";
 IPAddress ap_ip = IPAddress(192, 168, 4, 1);
 
-const char* ssid     = "The Ping in the North";
-const char* password = "eatyourvegetables2";
-const char* host = "lamp";
+struct WiFiConfStruct
+{
+  char          ssid[64] = "somessid";
+  char          pass[64] = "badpass";
+} WiFiSettings;
+
+const char* wifisettingsfile = "/wificonf.txt";
+
+const char* host = "";
 
 Lamp lamp = Lamp(LED_DATA_PIN, NUM_LEDS, NUM_COLS); 
 AnimationManager amngr = AnimationManager();
@@ -117,7 +127,7 @@ boolean connect(const char *ssid, char const *password) {
   // We start by connecting to a WiFi network
   USE_SERIAL.print("Connecting to ");
   USE_SERIAL.println(ssid);
-  
+  WiFi.hostname(host);
   WiFi.begin(ssid, password);
   int8_t tries = 20;
   while (!wifiConnected() && tries > 0) {
@@ -126,8 +136,13 @@ boolean connect(const char *ssid, char const *password) {
     tries--;
   }
   if(wifiConnected()) {
+    strcpy(WiFiSettings.ssid, ssid);
+    strcpy(WiFiSettings.pass, password);
+    SaveToFile((char*) wifisettingsfile, 0, (byte*)&WiFiSettings, sizeof(struct WiFiConfStruct));
     USE_SERIAL.println("");
-    USE_SERIAL.println("WiFi connected");  
+    USE_SERIAL.println("WiFi connected");
+    USE_SERIAL.println("SSID: ");
+    USE_SERIAL.println(WiFiSettings.ssid);  
     USE_SERIAL.println("IP address: ");
     USE_SERIAL.println(WiFi.localIP());
     return true;
@@ -197,12 +212,28 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t len) {
     }
 }
 
+
+
 void setup() {
+    //this needs to happen IMMEDIATELY so everything else can use these values!
+    device_id = ESP.getChipId();
+    device_name = device + "_" + device_id;
+    host = device_name.c_str();
+
+    setupFilestorage();
+
     USE_SERIAL.begin(9600);
+    delay(500);
+    
+    USE_SERIAL.println("Booting "+device_name);
+
+    //get stored wifi settings if they have previously been saved:
+    LoadFromFile((char*) wifisettingsfile, 0, (byte*)&WiFiSettings, sizeof(struct WiFiConfStruct));
+
     //if wifi fails to connect to an access point
     //we start up in AP mode so you can enter the wifi creds
     //and do setup
-    if(!connect(ssid, password)) {
+    if(!connect(WiFiSettings.ssid, WiFiSettings.pass)) {
       startConfigPortal(ap_ssid.c_str(), ap_password.c_str()); 
     }
 
@@ -210,7 +241,7 @@ void setup() {
     dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
     dnsServer.start(DNS_PORT, "*", ap_ip);
 
-//    setupOTA();
+    setupOTA();
 
     // start webSocket server
     webSocket.begin();
@@ -257,12 +288,12 @@ static inline void fps(const int seconds){
 }
 
 void loop() {
-    fps(1);
+//    fps(1);
     if(!wifiConnected()) {
       dnsServer.processNextRequest();
     }
     else{
-//      otaLoop();  
+      otaLoop();  
       amngr.loop();
       webSocket.loop();
     }
