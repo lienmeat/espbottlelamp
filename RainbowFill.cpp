@@ -5,7 +5,6 @@
 RainbowFill::RainbowFill(Lamp* thelamp, String name) : LampAnimation (thelamp, name)
 {
   //ctor
-  //lamp = thelamp;
   hue_step = 255 / lamp->getNumLeds();
   setFPS(5);
 }

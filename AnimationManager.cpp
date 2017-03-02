@@ -34,6 +34,16 @@ void AnimationManager::switchAnimation(int8_t idx) {
   }
 }
 
+int AnimationManager::switchAnimationByName(String name) {
+  for(int i = 0; i < num_animations; i++) {
+    if(anims[i]->getName() == name) {
+      cur_animation = i;
+      return i;
+    }
+  }
+  return -1;
+}
+
 int8_t AnimationManager::getNumAnimations() {
   return num_animations;  
 }

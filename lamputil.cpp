@@ -35,3 +35,23 @@ uint8_t* hue_analogous(uint8_t hue, uint8_t* hues) {
   hues[2] = hue + 234;
   return hues;
 }
+
+CRGB hexToColor(String hex) {
+  uint8_t r, g, b;
+  char * t_hex = (char *) hex.c_str();
+  char * ept;
+  for(int i = 1; i < 8; i++) {
+    t_hex[i-1] = t_hex[i];
+  }
+  unsigned long l_hex = strtol(t_hex, &ept, 16);
+  r = (l_hex & 0xFF0000) >> 16;
+  g = (l_hex & 0x00FF00) >> 8;
+  b = (l_hex & 0x0000FF);
+  return CRGB(r, g, b);
+}
+
+String colorToHex(CRGB color) {
+  char hexout[8];
+  sprintf(hexout,"#%02x%02x%02x", (char) color.r, (char) color.g, (char) color.b);
+  return (String) hexout;
+}

@@ -18,6 +18,8 @@ class AnimationManager
     //gets the current animation
     LampAnimation* getCurrentAnimation();
     void switchAnimation(int8_t idx);
+    //switch to an animation by name & return index or -1
+    int switchAnimationByName(String name);
     //gets number of animations
     int8_t getNumAnimations();
     //gets an array of animation names

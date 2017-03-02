@@ -6,6 +6,7 @@
 #include "ota.h"
 
 //animation libs
+#include "lamputil.h"
 #include "LampAnimation.h"
 #include "RainbowFill.h"
 #include "Fire.h"
@@ -15,18 +16,15 @@
 //webserver and endpoint handling
 #include "webserver.h"
 
+#include <PubSubClient.h>
 
 #include <ESP8266WiFi.h>
-#include <WebSocketsServer.h>
 #include <ESP8266mDNS.h>
 #include <DNSServer.h>
-#include <Hash.h>
 
 #define USE_SERIAL Serial
 
 #define LED_DATA_PIN 2
-//#define p1 0
-//#define p2 2
 #define NUM_LEDS 4
 #define NUM_COLS 4
 
@@ -51,48 +49,32 @@ const char* wifisettingsfile = "/wificonf.txt";
 
 const char* host = "";
 
+const char* mqtt_server = "lienmac";
+WiFiClient espmqttclient;
+PubSubClient mqtt(espmqttclient);
+
+//mqtt topics
+//"mode" of the lamp (animation name, solid color, off, on)
+String topic_mode;
+//color of the lamp in "Solid Color" mode
+String topic_color;
+//speed of lamp animation updates
+String topic_speed;
+//set mode topic to control the the lamp
+String topic_set_mode;
+//set speed topic to control the the lamp
+String topic_set_speed;
+//set color topic to control the the lamp
+String topic_set_color;
+
 Lamp lamp = Lamp(LED_DATA_PIN, NUM_LEDS, NUM_COLS); 
 AnimationManager amngr = AnimationManager();
 
-WebSocketsServer webSocket = WebSocketsServer(81);
-
-int hue = 0;
-int hue_step = 2;
-int cur_delay = 0;
-
-uint8_t red = 0;
-uint8_t green = 0;
-uint8_t blue = 0;
-//percent of normal speed
+CRGB cur_color;
 uint8_t cur_speed = 100;
 uint8_t cur_animation = 0;
-int8_t hue_shift = -1;
 
 ColorAnim* cf;
-
-long ms = 0;
-long begin = 0;
-
-/** IP to String? */
-String toStringIp(IPAddress ip) {
-  String res = "";
-  for (int i = 0; i < 3; i++) {
-    res += String((ip >> (8 * i)) & 0xFF) + ".";
-  }
-  res += String(((ip >> 8 * 3)) & 0xFF);
-  return res;
-}
-
-/** Is this an IP? */
-boolean isIp(String str) {
-  for (int i = 0; i < str.length(); i++) {
-    int c = str.charAt(i);
-    if (c != '.' && (c < '0' || c > '9')) {
-      return false;
-    }
-  }
-  return true;
-}
 
 void setupConfigPortal(const char *ssid, const char* password) {
   Serial.println("Configuring access point... ");
@@ -151,68 +133,131 @@ boolean connect(const char *ssid, char const *password) {
   return false;
 }
 
-String getStateString() {
-  String state = "STATE:";
-  state += "r:" + (String) red + ";";
-  state += "g:" + (String) green + ";";
-  state += "b:" + (String) blue + ";"; 
-  state += "speed:" + (String) cur_speed + ";";
-  state += "anim:" + (String) cur_animation + ";";
-  state += "anims:";
-  state += amngr.getAnimationNames();
-  state+=";";
-  return state;
+void mqtt_publish_mode() {
+  String payload = amngr.getCurrentAnimation()->getName();
+  mqtt.publish(topic_mode.c_str(), payload.c_str());
 }
 
-void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t len) {
-    switch(type) {
-        case WStype_DISCONNECTED:
-            USE_SERIAL.printf("[%u] Disconnected!\n", num);
-            break;
-        case WStype_CONNECTED: {
-            IPAddress ip = webSocket.remoteIP(num);
-            USE_SERIAL.printf("[%u] Connected from %d.%d.%d.%d url: %s\n", num, ip[0], ip[1], ip[2], ip[3], payload);
+void mqtt_publish_color() {
+  String payload = colorToHex(cur_color);
+  mqtt.publish(topic_color.c_str(), payload.c_str());   
+}
 
-            // send message to client
-            webSocket.sendTXT(num, "Connected");
-            String state = getStateString();
-            webSocket.sendTXT(num, state);
-            break;
-        }
-        case WStype_TEXT:
-            String payload_str = (char *) payload;
-            USE_SERIAL.printf("[%u] get Text: %s\n", num, payload);
+void mqtt_publish_speed() {
+  String payload = (String) cur_speed;
+  mqtt.publish(topic_speed.c_str(), payload.c_str());   
+}
 
-            if(payload_str.startsWith("color:")) {
-                // we get RGB data
-                // decode rgb data
-                uint32_t rgb = (uint32_t) strtol((const char *) &payload[7], NULL, 16);
-                red = ((rgb >> 16) & 0xFF);
-                green = ((rgb >> 8) & 0xFF);
-                blue = ((rgb >> 0) & 0xFF);
-                //ColorAnim* colorfill = amngr.getAnimation(0);
-                cf->setColor(CRGB(red, green, blue));
-            }
+void mqtt_set_mode(String payload) {
+  int idx = amngr.switchAnimationByName(payload);
+  if(idx >= 0) {
+    cur_animation = idx;
+    mqtt_publish_mode();  
+  } 
+}
 
-            if(payload_str.startsWith("anim:")) {
-                //animation
-                cur_animation = (uint8_t) strtol((const char *) &payload[5], NULL, 10);
-                amngr.switchAnimation(cur_animation);
-            } 
-            if(payload_str.startsWith("speed:")) {
-                //animation speed
-                cur_speed = (uint8_t) strtol((const char *) &payload[6], NULL, 10);
-                amngr.setSpeed(cur_speed);
-            }
-            
-            String state = getStateString();
-            webSocket.broadcastTXT(state);
-            
-            break;
+void mqtt_set_color(String payload) {
+  cur_color = hexToColor(payload);
+  cf->setColor(cur_color);
+  mqtt_publish_color();
+}
+
+void mqtt_set_speed(String payload) {
+  cur_speed = atoi(payload.c_str());
+  amngr.setSpeed(cur_speed);
+  mqtt_publish_speed();
+}
+
+void mqtt_subscribe_callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
+  char c[length+1];
+  for(int j = 0; j < length; j++) {
+    c[j] = (char) payload[j];
+  }
+  c[length] = '\0';
+  String payload_s = c;
+  
+  if((String) topic == topic_set_mode) {
+      //set the mode
+      mqtt_set_mode(payload_s);
+  }
+  if((String) topic == topic_set_color) {
+      //set the color
+      mqtt_set_color(payload_s);
+  }
+  if((String) topic == topic_set_speed) {
+      //set the speed
+      mqtt_set_speed(payload_s);
+  }
+}
+
+void setupMQTT() {
+    String t_pfx = device + "/" + device_name;
+    topic_mode = t_pfx + "/mode";
+    topic_color = t_pfx + "/color";
+    topic_speed = t_pfx + "/speed";
+    topic_set_mode = t_pfx + "/set/mode";
+    topic_set_color = t_pfx + "/set/color";
+    topic_set_speed = t_pfx + "/set/speed";
+
+    USE_SERIAL.println("mqtt publishing to: ");
+    USE_SERIAL.println(topic_mode);
+    USE_SERIAL.println(topic_color);
+    USE_SERIAL.println(topic_speed);
+    USE_SERIAL.println("mqtt subscribing to: ");
+    USE_SERIAL.println(topic_set_mode);
+    USE_SERIAL.println(topic_set_color);
+    USE_SERIAL.println(topic_set_speed);
+    
+    mqtt.setServer(mqtt_server, 1883);
+    mqtt.setCallback(mqtt_subscribe_callback);  
+}
+
+void reconnect_mqtt() {
+  // Loop until we're reconnected
+  while (!mqtt.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Attempt to connect
+    if (mqtt.connect(device_name.c_str())) {
+      Serial.println("connected");
+      // Once connected, publish current settings
+      mqtt_publish_mode();
+      mqtt_publish_color();
+      mqtt_publish_speed();
+      // resubscribe to topics
+      mqtt.subscribe(topic_set_mode.c_str());
+      mqtt.subscribe(topic_set_color.c_str());
+      mqtt.subscribe(topic_set_speed.c_str());
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(mqtt.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
     }
+  }
 }
 
 
+void setupLamp() {
+    lamp.begin();
+    //we keep a reference to colorfill, so that we can switch it's color
+    //on the fly.
+    cf = new ColorAnim(&lamp, CRGB::White, "Solid Color");
+    amngr.addAnimation(new ColorAnim(&lamp, CRGB::White, "On"));
+    amngr.addAnimation(new ColorAnim(&lamp, CRGB::Black, "Off"));
+    amngr.addAnimation(cf);
+    amngr.addAnimation(new RainbowFill(&lamp, "Rainbow"));
+    amngr.addAnimation(new Seahawks(&lamp, "Seahawks"));
+    amngr.addAnimation(new Fire(&lamp, "Fire"));
+    amngr.begin();
+}
 
 void setup() {
     //this needs to happen IMMEDIATELY so everything else can use these values!
@@ -237,15 +282,13 @@ void setup() {
       startConfigPortal(ap_ssid.c_str(), ap_password.c_str()); 
     }
 
+    setupMQTT();
+    
     /* Setup the DNS server redirecting all the domains to the apIP for the captive portal to work*/
     dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
     dnsServer.start(DNS_PORT, "*", ap_ip);
 
     setupOTA();
-
-    // start webSocket server
-    webSocket.begin();
-    webSocket.onEvent(webSocketEvent);
 
     if(MDNS.begin(host)) {
         USE_SERIAL.println("MDNS responder started");
@@ -255,48 +298,23 @@ void setup() {
 
     // Add service to MDNS
     MDNS.addService("http", "tcp", 80);
-    MDNS.addService("ws", "tcp", 81);
-    lamp.begin();
-
-    cf = new ColorAnim(&lamp, CRGB::White, "ColorFill");
-    amngr.addAnimation(cf);
-    amngr.addAnimation(new RainbowFill(&lamp, "Rainbow"));
-    amngr.addAnimation(new Seahawks(&lamp, "Seahawks"));
-    amngr.addAnimation(new Fire(&lamp, "Fire"));
-    amngr.addAnimation(new ColorAnim(&lamp, CRGB::White, "On/White"));
-    amngr.addAnimation(new ColorAnim(&lamp, CRGB::Black, "Off/Black"));
-    amngr.begin();
+    
+    setupLamp();
+    
     USE_SERIAL.println("SETUP COMPLETE!!!");
 }
 
-static inline void fps(const int seconds){
-  // Create static variables so that the code and variables can
-  // all be declared inside a function
-  static unsigned long lastMillis;
-  static unsigned long frameCount;
-  static unsigned int framesPerSecond;
-  
-  // It is best if we declare millis() only once
-  unsigned long now = millis();
-  frameCount ++;
-  if (now - lastMillis >= seconds * 1000) {
-    framesPerSecond = frameCount / seconds;
-    Serial.println(framesPerSecond);
-    frameCount = 0;
-    lastMillis = now;
-  }
-}
-
 void loop() {
-//    fps(1);
-    if(!wifiConnected()) {
-      dnsServer.processNextRequest();
-    }
-    else{
-      otaLoop();  
-      amngr.loop();
-      webSocket.loop();
-    }
+  if(!wifiConnected()) {
+    dnsServer.processNextRequest();
     webserverLoop();
+  }else{
+    if (!mqtt.connected()) {
+      reconnect_mqtt();
+    }
+    mqtt.loop();
+    otaLoop();
+    amngr.loop();
+  }
 }
 

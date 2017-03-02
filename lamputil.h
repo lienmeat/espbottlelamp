@@ -9,3 +9,7 @@ uint8_t* hue_triads(uint8_t hue, uint8_t* hues);
 uint8_t* hue_tetrads(uint8_t hue, uint8_t* hues);
 
 uint8_t* hue_analogous(uint8_t hue, uint8_t* hues);
+
+CRGB hexToColor(String hex);
+
+String colorToHex(CRGB color);
