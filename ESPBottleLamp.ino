@@ -60,12 +60,16 @@ String topic_mode;
 String topic_color;
 //speed of lamp animation updates
 String topic_speed;
+//a topic for sending a comma-separated list of modes available
+String topic_mode_list;
 //set mode topic to control the the lamp
 String topic_set_mode;
 //set speed topic to control the the lamp
 String topic_set_speed;
 //set color topic to control the the lamp
 String topic_set_color;
+//a message on this topic means an observer/controller needs an update.  Basically a health check/status report.
+String topic_status_update;
 
 Lamp lamp = Lamp(LED_DATA_PIN, NUM_LEDS, NUM_COLS); 
 AnimationManager amngr = AnimationManager();
@@ -133,6 +137,11 @@ boolean connect(const char *ssid, char const *password) {
   return false;
 }
 
+void mqtt_publish_mode_list() {
+  String payload = amngr.getAnimationNames();
+  mqtt.publish(topic_mode_list.c_str(), payload.c_str());
+}
+
 void mqtt_publish_mode() {
   String payload = amngr.getCurrentAnimation()->getName();
   mqtt.publish(topic_mode.c_str(), payload.c_str());
@@ -146,6 +155,13 @@ void mqtt_publish_color() {
 void mqtt_publish_speed() {
   String payload = (String) cur_speed;
   mqtt.publish(topic_speed.c_str(), payload.c_str());   
+}
+
+void mqtt_publish_all() {
+  mqtt_publish_mode_list(); 
+  mqtt_publish_mode();
+  mqtt_publish_color();
+  mqtt_publish_speed();
 }
 
 void mqtt_set_mode(String payload) {
@@ -195,25 +211,34 @@ void mqtt_subscribe_callback(char* topic, byte* payload, unsigned int length) {
       //set the speed
       mqtt_set_speed(payload_s);
   }
+  if((String) topic == topic_status_update) {
+      mqtt_publish_all();
+  }
 }
 
 void setupMQTT() {
     String t_pfx = device + "/" + device_name;
+    //publish topics
     topic_mode = t_pfx + "/mode";
     topic_color = t_pfx + "/color";
     topic_speed = t_pfx + "/speed";
+    topic_mode_list = t_pfx + "/modelist";
+    //subscribe topics
     topic_set_mode = t_pfx + "/set/mode";
     topic_set_color = t_pfx + "/set/color";
     topic_set_speed = t_pfx + "/set/speed";
+    topic_status_update = t_pfx + "/statusupdate";
 
     USE_SERIAL.println("mqtt publishing to: ");
     USE_SERIAL.println(topic_mode);
     USE_SERIAL.println(topic_color);
     USE_SERIAL.println(topic_speed);
+    USE_SERIAL.println(topic_mode_list);
     USE_SERIAL.println("mqtt subscribing to: ");
     USE_SERIAL.println(topic_set_mode);
     USE_SERIAL.println(topic_set_color);
     USE_SERIAL.println(topic_set_speed);
+    USE_SERIAL.println(topic_status_update);
     
     mqtt.setServer(mqtt_server, 1883);
     mqtt.setCallback(mqtt_subscribe_callback);  
@@ -227,13 +252,12 @@ void reconnect_mqtt() {
     if (mqtt.connect(device_name.c_str())) {
       Serial.println("connected");
       // Once connected, publish current settings
-      mqtt_publish_mode();
-      mqtt_publish_color();
-      mqtt_publish_speed();
+      mqtt_publish_all();
       // resubscribe to topics
       mqtt.subscribe(topic_set_mode.c_str());
       mqtt.subscribe(topic_set_color.c_str());
       mqtt.subscribe(topic_set_speed.c_str());
+      mqtt.subscribe(topic_status_update.c_str());
     } else {
       Serial.print("failed, rc=");
       Serial.print(mqtt.state());
