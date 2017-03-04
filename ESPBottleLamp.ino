@@ -49,7 +49,8 @@ const char* wifisettingsfile = "/wificonf.txt";
 
 const char* host = "";
 
-const char* mqtt_server = "lienmac";
+const char* mqtt_server = "ericslien.com";
+int mqtt_port = 1883;
 WiFiClient espmqttclient;
 PubSubClient mqtt(espmqttclient);
 
@@ -240,7 +241,7 @@ void setupMQTT() {
     USE_SERIAL.println(topic_set_speed);
     USE_SERIAL.println(topic_status_update);
     
-    mqtt.setServer(mqtt_server, 1883);
+    mqtt.setServer(mqtt_server, mqtt_port);
     mqtt.setCallback(mqtt_subscribe_callback);  
 }
 
